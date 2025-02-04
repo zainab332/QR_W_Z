@@ -1,0 +1,171 @@
+package com.example.qr
+
+import android.content.ContentValues
+import android.content.Context
+import android.content.Intent
+import android.graphics.Bitmap
+import android.os.Build
+import android.os.Bundle
+import android.provider.MediaStore
+import android.view.LayoutInflater
+import android.view.View
+import android.view.ViewGroup
+import android.widget.Button
+import android.widget.EditText
+import android.widget.ImageView
+import android.widget.Toast
+import androidx.fragment.app.Fragment
+import com.google.zxing.BarcodeFormat
+import com.journeyapps.barcodescanner.BarcodeEncoder
+import java.io.File
+import java.io.FileOutputStream
+
+class ContactFragment : Fragment() {
+
+    override fun onCreateView(
+        inflater: LayoutInflater, container: ViewGroup?,
+        savedInstanceState: Bundle?
+    ): View? {
+        return inflater.inflate(R.layout.fragment_contact, container, false)
+    }
+
+    override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
+        super.onViewCreated(view, savedInstanceState)
+
+        val nameInput: EditText = view.findViewById(R.id.contactNameInput)
+        val phoneInput: EditText = view.findViewById(R.id.contactPhoneInput)
+        val emailInput: EditText = view.findViewById(R.id.contactEmailInput)
+        val generateButton: Button = view.findViewById(R.id.generateContactQr)
+        val saveButton: ImageView = view.findViewById(R.id.saveQrCode)
+        val shareButton: ImageView = view.findViewById(R.id.shareQrCode) // Bouton pour partager le QR code
+        val qrCodeImageView: ImageView = view.findViewById(R.id.qrImageView)
+
+        var qrBitmap: Bitmap? = null // Stocker le bitmap du QR code
+
+        generateButton.setOnClickListener {
+            val name = nameInput.text.toString().trim()
+            val phone = phoneInput.text.toString().trim()
+            val email = emailInput.text.toString().trim()
+
+            // Validation des champs
+            if (name.isEmpty() || phone.isEmpty() || email.isEmpty()) {
+                Toast.makeText(context, "Please fill in all fields", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+
+            // Génération du contenu du vCard
+            val vCard = """
+                BEGIN:VCARD
+                VERSION:3.0
+                N:$name
+                TEL:$phone
+                EMAIL:$email
+                END:VCARD
+            """.trimIndent()
+
+            // Génération du QR code
+            qrBitmap = generateQRCode(vCard, qrCodeImageView)
+
+            // Vider les champs après la génération
+            nameInput.setText("")
+            phoneInput.setText("")
+            emailInput.setText("")
+
+            // Make the save and share buttons visible
+            saveButton.visibility = View.VISIBLE
+            shareButton.visibility = View.VISIBLE
+
+            Toast.makeText(context, "QR code generated", Toast.LENGTH_SHORT).show()
+        }
+
+        saveButton.setOnClickListener {
+            if (qrBitmap != null) {
+                saveImageToGallery(requireContext(), qrBitmap!!)
+            } else {
+                Toast.makeText(context, "No QR code to save", Toast.LENGTH_SHORT).show()
+            }
+        }
+
+        shareButton.setOnClickListener {
+            qrBitmap?.let { bitmap ->
+                shareImage(requireContext(), bitmap)
+            } ?: Toast.makeText(context, "No QR code to share", Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun generateQRCode(data: String, imageView: ImageView): Bitmap? {
+        return try {
+            val barcodeEncoder = BarcodeEncoder()
+            val bitmap = barcodeEncoder.encodeBitmap(data, BarcodeFormat.QR_CODE, 512, 512)
+            imageView.setImageBitmap(bitmap)
+            bitmap
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(context, "Error generating QR code", Toast.LENGTH_SHORT).show()
+            null
+        }
+    }
+
+    private fun saveImageToGallery(context: Context, bitmap: Bitmap) {
+        val filename = "QRCode_${System.currentTimeMillis()}.png"
+        val resolver = context.contentResolver
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val contentValues = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                put(MediaStore.MediaColumns.MIME_TYPE, "image/png")
+                put(MediaStore.MediaColumns.RELATIVE_PATH, "DCIM/QRCode")
+            }
+
+            val uri = resolver.insert(MediaStore.Images.Media.EXTERNAL_CONTENT_URI, contentValues)
+            uri?.let {
+                resolver.openOutputStream(it)?.use { outputStream ->
+                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
+                    Toast.makeText(context, "QR code saved to gallery", Toast.LENGTH_SHORT).show()
+                }
+            }
+        } else {
+            val directory = context.getExternalFilesDir("QRCode")
+            val file = directory?.let { dir -> File(dir, filename) }
+            if (file != null) {
+                FileOutputStream(file).use { outputStream ->
+                    bitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
+                    Toast.makeText(context, "QR code saved to ${file.absolutePath}", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    private fun shareImage(context: Context, bitmap: Bitmap) {
+        try {
+            // Crée un fichier temporaire pour le QR code
+            val cachePath = File(context.cacheDir, "images")
+            cachePath.mkdirs() // Crée les dossiers nécessaires
+            val file = File(cachePath, "shared_qrcode.png")
+            FileOutputStream(file).use { outputStream ->
+                bitmap.compress(Bitmap.CompressFormat.PNG, 100, outputStream)
+            }
+
+            // Obtenir l'URI avec FileProvider
+            val fileUri = androidx.core.content.FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.provider", // Correspond à l'autorité dans le manifest
+                file
+            )
+
+            // Créer et lancer un intent de partage
+            val shareIntent = Intent().apply {
+                action = Intent.ACTION_SEND
+                putExtra(Intent.EXTRA_STREAM, fileUri)
+                type = "image/png"
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+
+            context.startActivity(Intent.createChooser(shareIntent, "Share QR Code"))
+
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Toast.makeText(context, "Error sharing QR code", Toast.LENGTH_SHORT).show()
+        }
+    }
+}
